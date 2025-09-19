@@ -78,9 +78,9 @@ Clone the repo into `/root/`:
 cd /root
 git clone https://github.com/saporus/kumo-mta-ui.git
 cd kumo-mta-ui
+```
 
-### One-shot installer
-Run this from the **repo root**:
+### 2. Run the one-shot installer
 
 ```bash
 sudo bash scripts/install_kumo_ui.sh --domain mail.example.com --api-key "LONG_RANDOM_SECRET"
