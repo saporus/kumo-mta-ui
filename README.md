@@ -12,8 +12,8 @@ A modern, MailerQ-style admin UI for **KumoMTA** with:
 ## Features
 
 - **Dashboard:** throughput, queue, recent events, quick actions (Reload Policy, Flush Queue)
-- **Shaping Rules:** TOML blocks (gmail/yahoo/outlook) with validate/reload buttons
-- **Domains, IP Pools, DKIM:** clean tables/cards ready to wire to your backend
+- **Queues:** live view of message queues, showing `Name`, `#Rcpt`, `#KBytes`, `#Conn`, `Paused`, `Mode`, `Last Error`, and `Actions`.  
+  Each row has a **View** button that shows the last 5 errors from the deferred/queue logs.
 - **Logs:** live `journalctl -u kumomta` streaming via Server-Sent Events
 - **API:** documented endpoints behind Nginx, protected by an API key header
 
@@ -69,6 +69,15 @@ The proxy exposes:
 ---
 
 ## Production Install (AlmaLinux 9)
+
+### 1. Download the project
+
+Clone the repo into `/root/`:
+
+```bash
+cd /root
+git clone https://github.com/saporus/kumo-mta-ui.git
+cd kumo-mta-ui
 
 ### One-shot installer
 Run this from the **repo root**:
