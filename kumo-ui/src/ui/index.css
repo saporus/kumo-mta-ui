@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --chart-1: #2563eb; /* delivered */
+  --chart-2: #16a34a; /* deferred  */
+  --chart-3: #f59e0b; /* bounced   */
+  --chart-4: #9333ea; /* received  */
+}

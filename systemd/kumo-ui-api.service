@@ -1,0 +1,16 @@
+[Unit]
+Description=Kumo UI API Proxy
+After=network.target
+
+[Service]
+SupplementaryGroups=systemd-journal
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/kumo-ui-api/.env
+ExecStart=/usr/bin/node /opt/kumo-ui-api/server.js
+Restart=always
+User=kumoapi
+Group=kumoapi
+WorkingDirectory=/opt/kumo-ui-api
+
+[Install]
+WantedBy=multi-user.target
