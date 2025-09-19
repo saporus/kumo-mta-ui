@@ -107,18 +107,7 @@ Open: `http://mail.example.com/ui/`
 - **Never** expose KumoMTA’s HTTP externally. Bind to `127.0.0.1:8000`.
 - The browser hits `/ui/api/*` → Nginx → local proxy (with `X-API-Key`).
 - Store secrets in `.env` (not committed). Commit only `.env.example`.
-- Consider Basic Auth or JWT in front of the UI for multi-tenant setups.
-
----
-
-## Wiring to Your Backend (MagicSMTP)
-
-The UI shows TOML and tables as **stubs**. For real edits:
-- Add endpoints in your own backend (MagicSMTP) to read/write:
-  - **Shaping** profiles (TOML)
-  - **Pool/Source** definitions
-  - **Domains/DKIM** metadata & key rotation
-- Trigger a safe **policy reload** after writes.
+- Consider Basic Auth or JWT in front of the UI for multi-tenant setups (The choice is yours to do).
 
 ---
 
