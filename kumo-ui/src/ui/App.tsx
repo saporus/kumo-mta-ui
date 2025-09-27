@@ -212,7 +212,7 @@ const Dashboard: React.FC<{
   const totals = metrics?.totals ?? {}
   const outFromSession = computeOutWindowsFromSession(metrics)
   const trafficTotalIn  = traffic?.total?.in
-  const trafficTotalOut = traffic?.total?.out ?? (n(totals.delivered) + n(totals.deferred) + n(totals.bounced))
+  const trafficTotalOut = traffic?.total?.out ?? (n(totals.delivered) + n(totals.bounced))
   const trafficLHIn     = traffic?.lastHour?.in
   const trafficLHOut    = traffic?.lastHour?.out ?? outFromSession?.lastHour
   const trafficTHIn     = traffic?.topHour?.in

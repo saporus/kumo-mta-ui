@@ -44,7 +44,7 @@ const sumArrayAt = (arr) =>
 // Prefer a specific service rollup to avoid double-counting (parent + child)
 const pickServiceTotal = (serviceObj) => {
   if (!serviceObj || typeof serviceObj !== 'object') return 0;
-  for (const k of ['smtp_client', 'smtp', 'http', 'submission']) {
+  for (const k of ['smtp_client', 'smtp', 'http', 'submission', 'esmtp_listener']) {
     if (isNum(serviceObj[k])) return serviceObj[k];
   }
   // Fallback: sum everything (may double count on some setups)
@@ -125,20 +125,13 @@ function normalizeMsg(v) {
   return typeof v === 'string' ? v : String(v ?? '');
 }
 
-function stripAnsi(s = '') {
-  return String(s).replace(/\x1B\[[0-9;]*m/g, '');
-}
+function stripAnsi(s = '') { return String(s).replace(/\x1B\[[0-9;]*m/g, ''); }
 
 function isDeferralLine(line) {
-  // Common SMTP codes & phrases seen in Kumo logs
-  return /\b4\d\d\b/.test(line)               // 421, 450–459, etc.
-      || /\b4\.\d\.\d\b/.test(line)           // 4.7.0, 4.4.2 …
-      || /\btemporary failure\b/i.test(line)
-      || /\btransient\b/i.test(line)
-      || /\bdefer(?:red|ral)?\b/i.test(line)
-      || /\brate ?limit(?:ed|ing)?\b/i.test(line)
-      || /\bgreylist(?:ed|ing)?\b/i.test(line)
-      || /\btry(?:ing)? again later\b/i.test(line);
+  return /\b4\d\d\b/.test(line) || /\b4\.\d\.\d\b/.test(line)
+      || /\btemporary failure\b/i.test(line) || /\btransient\b/i.test(line)
+      || /\bdefer(?:red|ral)?\b/i.test(line) || /\brate ?limit(?:ed|ing)?\b/i.test(line)
+      || /\bgreylist(?:ed|ing)?\b/i.test(line) || /\btry(?:ing)? again later\b/i.test(line);
 }
 
 // ---------- Deferral + Events capture ----------
@@ -146,33 +139,26 @@ function extractDomain(s) {
   if (!s) return null;
   const txt = String(s);
   const m =
-    txt.match(/@([a-z0-9.-]+\.[a-z]{2,})/i) ||                      // user@domain
-    txt.match(/\bdomain[=:]\s*([a-z0-9.-]+\.[a-z]{2,})\b/i) ||      // domain=example.com
+    txt.match(/@([a-z0-9.-]+\.[a-z]{2,})/i) ||
+    txt.match(/\bdomain[=:]\s*([a-z0-9.-]+\.[a-z]{2,})\b/i) ||
     txt.match(/\bprovider[_ ]domain[=:]\s*([a-z0-9.-]+\.[a-z]{2,})\b/i) ||
     txt.match(/\bmx\s+(?:host|domain)[=:]\s*([a-z0-9.-]+\.[a-z]{2,})\b/i) ||
-    txt.match(/<[^@\s<>]+@([a-z0-9.-]+\.[a-z]{2,})>/i) ||           // <user@domain>
+    txt.match(/<[^@\s<>]+@([a-z0-9.-]+\.[a-z]{2,})>/i) ||
     txt.match(/\bto[=:]\s*(?:<?[^@\s<]+@)?([a-z0-9.-]+\.[a-z]{2,})>?/i) ||
     txt.match(/\brcpt[=:]\s*(?:<?[^@\s<]+@)?([a-z0-9.-]+\.[a-z]{2,})>?/i);
   return m ? m[1].toLowerCase() : null;
 }
-
-function looks4xx(code) {
-  const x = Number(code);
-  return Number.isFinite(x) && x >= 400 && x < 500;
-}
-
+function looks4xx(code) { const x = Number(code); return Number.isFinite(x) && x >= 400 && x < 500; }
 function isDeferralJson(obj) {
   const outcome = (obj.outcome || obj.status || obj.result || '').toString().toLowerCase();
   const klass   = (obj.status_class || obj.class || '').toString();
   const code    = obj.smtp_code || obj.smtp?.code || obj.code;
   return /transient|defer/.test(outcome) || klass === '4' || looks4xx(code);
 }
-
 function rcptFromJson(obj) {
   return obj.rcpt || obj.recipient || obj.to ||
          obj.envelope?.to || obj.message?.rcpt || obj.message?.recipient || null;
 }
-
 function recordDeferral(domain) {
   if (!domain) return;
   const now = Date.now();
@@ -183,7 +169,6 @@ function recordDeferral(domain) {
     deferralEvents = deferralEvents.slice(-Math.floor(DEFERRAL_MAX_EVENTS * 0.9));
   }
 }
-
 function recordEvent(line) {
   const s = stripAnsi(String(line)).trim();
   if (!s) return;
@@ -192,51 +177,33 @@ function recordEvent(line) {
   recentEvents.push({ t: Date.now(), level, msg });
   if (recentEvents.length > EVENTS_MAX) recentEvents = recentEvents.slice(-EVENTS_MAX);
 }
-
 function startDeferralWatcher() {
-  // Use Kumo’s built-in tailer to stream JSON log records in real time.
-  // Path may be /opt/kumomta/sbin/tailer or /usr/sbin/tailer depending on your install.
   const TAILER = process.env.KUMO_TAILER || '/opt/kumomta/sbin/tailer';
   const LOGDIR = process.env.KUMO_LOGDIR || '/var/log/kumomta';
-
   const proc = spawn(TAILER, ['--tail', LOGDIR], { env: process.env });
 
   let buf = '';
   const handleLine = (line) => {
     const s = String(line).trim();
     if (!s) return;
-
-    // Each line is JSON for an event/record (e.g., Delivery, TransientFailure, Bounce).
     let obj;
-    try { obj = JSON.parse(s); } catch {
-      // Not JSON? Record as event text and move on.
-      recordEvent(s);
-      return;
-    }
-
-    // Keep a readable event line for "Recent Events"
+    try { obj = JSON.parse(s); } catch { recordEvent(s); return; }
     recordEvent(obj.message || obj.event || obj.type || s);
 
-    // We only care about deferrals here
     const type = (obj.event || obj.type || '').toString();
     if (!/TransientFailure/i.test(type)) return;
 
-    // Try to resolve a domain for counting
     const dom =
       (obj.domain || obj.provider_domain || obj.rcpt_domain) ||
       extractDomain(obj.rcpt || obj.recipient || obj.envelope_to || obj.to || obj.message?.recipient || obj.message?.rcpt || '') ||
       extractDomain(obj.message || '');
-
     if (dom) recordDeferral(String(dom).toLowerCase());
 
-    // Capture “last error” summary for future UI
     const code  = obj.response?.code || obj.smtp?.code || obj.smtp_code;
     const enhl  = obj.response?.enhanced_code || obj.enhanced_code;
     const text  = obj.response?.content || obj.response?.text || obj.smtp?.text || obj.reason || obj.message || '';
     if (dom && (code || text)) {
       recordEvent(`DEFERRAL ${dom} ${code || ''} ${toEnhancedCode(enhl) || ''} ${trimText(text, 240)}`.trim());
-
-      // NEW: store a structured last-error entry for the domain
       pushLastError({
         domain: String(dom).toLowerCase(),
         provider: (obj.provider || obj.provider_domain || null) ?? undefined,
@@ -252,18 +219,12 @@ function startDeferralWatcher() {
     const lines = buf.split('\n'); buf = lines.pop() || '';
     for (const ln of lines) handleLine(ln);
   });
-
-  proc.stderr.on('data', (d) => {
-    // tailer may report rotations etc. Capture for visibility.
-    recordEvent(`tailer: ${String(d).trim()}`);
-  });
-
+  proc.stderr.on('data', (d) => { recordEvent(`tailer: ${String(d).trim()}`); });
   proc.on('close', (code) => {
     recordEvent(`tailer exited with code ${code}, retrying…`);
     setTimeout(startDeferralWatcher, 2000);
   });
 }
-
 
 // ---------- Sampling + windows ----------
 function prune() {
@@ -340,22 +301,25 @@ function buildSession() {
   };
 }
 
-// ---------- Poller: derive In = OutSent + Queue ----------
+// ---------- Poller: use true cumulatives from Kumo ----------
 function pushFromKumo(m) {
   const now = Date.now();
 
-  // OUT components (cumulative)
+  // OUT cumulatives
   const delivered =
+    (isNum(m?.total_messages_delivered?.value) ? m.total_messages_delivered.value : 0) ||
     pickServiceTotal(m?.total_messages_delivered?.value?.service) ||
     sumObjNums(m?.total_messages_delivered_by_provider?.value?.provider || {}) ||
     sumArrayAt(m?.total_messages_delivered_by_provider_and_source?.value || []) || 0;
 
   const deferred =
+    (isNum(m?.total_messages_transfail?.value) ? m.total_messages_transfail.value : 0) ||
     pickServiceTotal(m?.total_messages_transfail?.value?.service) ||
     sumObjNums(m?.total_messages_transfail_by_provider?.value?.provider || {}) ||
     sumArrayAt(m?.total_messages_transfail_by_provider_and_source?.value || []) || 0;
 
   const bounced =
+    (isNum(m?.total_messages_fail?.value) ? m.total_messages_fail.value : 0) ||
     pickServiceTotal(m?.total_messages_fail?.value?.service) ||
     sumObjNums(m?.total_messages_fail_by_provider?.value?.provider || {}) ||
     sumArrayAt(m?.total_messages_fail_by_provider_and_source?.value || []) || 0;
@@ -373,8 +337,10 @@ function pushFromKumo(m) {
   const depthPool = sumArrayAt(m?.queued_count_by_provider_and_pool?.value || []);
   const depth = depthProv || depthPool || (ready + scheduled) || 0;
 
-  // IN cumulative (derived): received = outSent + queue
-  const received = outSent + depth;
+  // IN cumulative: true inbound/accepted (no derivation)
+  const received =
+    (isNum(m?.total_messages_received?.value) ? m.total_messages_received.value : 0) ||
+    pickServiceTotal(m?.total_messages_received?.value?.service) || 0;
 
   samples.push({ t: now, received, delivered, deferred, bounced });
   qSamples.push({ t: now, depth, ready, scheduled });
@@ -401,7 +367,6 @@ async function loadState() {
     deferralEvents = Array.isArray(state.deferralEvents)
       ? state.deferralEvents.filter(e => e.t >= dCut)
       : [];
-    // optional: persist cached lists/events in future
   } catch {}
 }
 async function saveState() {
@@ -460,16 +425,19 @@ app.get('/metrics/summary', (_req, res) => {
 
     // OUT cumulatives
     const delivered =
+      (isNum(m?.total_messages_delivered?.value) ? m.total_messages_delivered.value : 0) ||
       pickServiceTotal(m?.total_messages_delivered?.value?.service) ||
       sumObjNums(m?.total_messages_delivered_by_provider?.value?.provider || {}) ||
       sumArrayAt(m?.total_messages_delivered_by_provider_and_source?.value || []) || 0;
 
     const deferred =
+      (isNum(m?.total_messages_transfail?.value) ? m.total_messages_transfail.value : 0) ||
       pickServiceTotal(m?.total_messages_transfail?.value?.service) ||
       sumObjNums(m?.total_messages_transfail_by_provider?.value?.provider || {}) ||
       sumArrayAt(m?.total_messages_transfail_by_provider_and_source?.value || []) || 0;
 
     const bounced =
+      (isNum(m?.total_messages_fail?.value) ? m.total_messages_fail.value : 0) ||
       pickServiceTotal(m?.total_messages_fail?.value?.service) ||
       sumObjNums(m?.total_messages_fail_by_provider?.value?.provider || {}) ||
       sumArrayAt(m?.total_messages_fail_by_provider_and_source?.value || []) || 0;
@@ -477,8 +445,11 @@ app.get('/metrics/summary', (_req, res) => {
     // "Out" = delivered + bounced (actually sent)
     const outSent = n(delivered) + n(bounced);
 
-    // "In" derived (stick to latest sample for consistency): in = outSent + queue
-    const received = samples.length ? samples[samples.length - 1].received : (outSent + depth);
+    // "In" = true inbound cumulative captured in samples
+    const received = samples.length ? samples[samples.length - 1].received : (
+      (isNum(m?.total_messages_received?.value) ? m.total_messages_received.value : 0) ||
+      pickServiceTotal(m?.total_messages_received?.value?.service) || 0
+    );
 
     // Windows + series
     const sess = buildSession();
@@ -554,6 +525,21 @@ app.get('/metrics/summary', (_req, res) => {
   }
 });
 
+// LAST-ERRORS read-only endpoint
+app.get('/metrics/last-errors', (req, res) => {
+  const qDomain = (req.query.domain || '').toString().toLowerCase().trim();
+  const limit = Math.min( Number(req.query.limit ?? 10) || 10, 50 );
+  if (qDomain) {
+    const rows = (lastErrors.get(qDomain) || []).slice(-limit).reverse();
+    return res.json({ domain: qDomain, rows });
+  }
+  const out = {};
+  for (const [dom, rows] of lastErrors.entries()) {
+    out[dom] = rows.slice(-limit).reverse();
+  }
+  res.json(out);
+});
+
 // Admin
 app.post('/policy/reload', (_req, res) => {
   const child = spawn('/bin/systemctl', ['reload', 'kumomta']);
@@ -561,7 +547,7 @@ app.post('/policy/reload', (_req, res) => {
 });
 app.post('/queue/flush', (_req, res) => { res.json({ ok: true }); });
 
-// Logs SSE (tail journald) — unchanged, still using `-o cat` for the Logs tab
+// Logs SSE (tail journald)
 app.get('/logs/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -578,7 +564,7 @@ app.get('/logs/stream', (req, res) => {
   req.on('close', () => jc.kill('SIGTERM'));
 });
 
-// ---------- Optional debug endpoints (do not affect normal UI) ----------
+// ---------- Optional debug endpoints ----------
 app.get('/debug/logprobe', async (_req, res) => {
   try {
     const p = spawn('journalctl', ['-u','kumomta','-n','50','-o','json']);
@@ -591,11 +577,7 @@ app.get('/debug/logprobe', async (_req, res) => {
         try {
           const o = JSON.parse(ln);
           const text = stripAnsi(normalizeMsg(o.MESSAGE)).slice(0, 300);
-          parsed.push({
-            text,
-            isDeferral: isDeferralLine(text),
-            domain: extractDomain(text)
-          });
+          parsed.push({ text, isDeferral: isDeferralLine(text), domain: extractDomain(text) });
         } catch {}
       }
       res.json(parsed);
@@ -605,40 +587,5 @@ app.get('/debug/logprobe', async (_req, res) => {
   }
 });
 
-app.post('/debug/deferral', (req, res) => {
-  const dom = (req.query.domain || 'example.com').toString().toLowerCase();
-  recordDeferral(dom);
-  recordEvent(`Synthetic deferral for ${dom}`);
-  res.json({ ok: true, domain: dom });
-});
-
-app.get('/debug/tailer', (_req, res) => {
-  const now = Date.now(), hourCutoff = now - 3_600_000;
-  const hour = {}, total = {};
-  for (const e of deferralEvents) {
-    total[e.domain] = (total[e.domain] || 0) + 1;
-    if (e.t >= hourCutoff) hour[e.domain] = (hour[e.domain] || 0) + 1;
-  }
-  res.json({ hour, total, recent: recentEvents.slice(-10) });
-});
-
-// ---------- LAST-ERRORS read-only endpoint ----------
-app.get('/metrics/last-errors', (req, res) => {
-  const qDomain = (req.query.domain || '').toString().toLowerCase().trim();
-  const limit = Math.min( Number(req.query.limit ?? 10) || 10, 50 );
-
-  if (qDomain) {
-    const rows = (lastErrors.get(qDomain) || []).slice(-limit).reverse();
-    return res.json({ domain: qDomain, rows });
-  }
-
-  const out = {};
-  for (const [dom, rows] of lastErrors.entries()) {
-    out[dom] = rows.slice(-limit).reverse();
-  }
-  res.json(out);
-});
-
-// ---------- Start ----------
 const port = process.env.PORT || 5055;
 app.listen(port, () => console.log(`kumo-ui-api listening on ${port}`));
